@@ -92,6 +92,12 @@ button.danger:hover{border-color:var(--danger);box-shadow:0 8px 24px rgba(244,63
 .sound-btn{border-color:rgba(52,211,153,.4);background:linear-gradient(180deg,rgba(52,211,153,.15),rgba(52,211,153,.03))}
 .sound-btn:hover{border-color:var(--green);box-shadow:0 8px 24px rgba(52,211,153,.3)}
 .sound-btn.muted{opacity:.55;border-color:rgba(127,155,184,.4);background:linear-gradient(180deg,rgba(127,155,184,.1),rgba(127,155,184,.02))}
+a.icon-btn{text-decoration:none;cursor:pointer;border:1px solid var(--line-2);background:linear-gradient(180deg,rgba(34,211,238,.10),rgba(34,211,238,.02));color:var(--text);border-radius:11px;padding:9px 12px;font-weight:600;font-family:inherit;font-size:13px;letter-spacing:.2px;transition:all .25s cubic-bezier(.2,.8,.2,1);margin:4px 3px 4px 0;position:relative;overflow:hidden;backdrop-filter:blur(8px);min-width:44px;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+html[dir="rtl"] a.icon-btn{margin:4px 0 4px 3px}
+a.icon-btn:hover{transform:translateY(-2px);border-color:var(--cyan);box-shadow:0 8px 24px rgba(34,211,238,.20);color:#fff}
+a.icon-btn:active{transform:translateY(0) scale(.98)}
+.connect-btn{border-color:rgba(103,232,249,.45);background:linear-gradient(180deg,rgba(103,232,249,.16),rgba(167,139,250,.06))}
+.connect-btn:hover{border-color:var(--cyan-2);box-shadow:0 8px 24px rgba(103,232,249,.32)}
 .ptable-open-btn{
   width:100%;
   border-color:rgba(167,139,250,.5);
@@ -587,6 +593,7 @@ button:disabled{
       <div class="subtitle" data-i18n="subtitle">// interactive molecular laboratory</div>
     </div>
     <div class="top-actions">
+            <a class="icon-btn connect-btn" id="connectBtn" href="https://github.com/y4rz6a" target="_blank" rel="noopener noreferrer"> <span data-i18n="connect">Connect</span></a>
       <button class="icon-btn sound-btn" id="soundBtn" onclick="toggleSound()">🔊 <span data-i18n="sound">Sound</span></button>
       <button class="icon-btn lang-btn" onclick="toggleLang()"> <span id="langBtnText">فارسی</span></button>
       <button class="icon-btn" onclick="showHelp()">❔ <span data-i18n="help">Help</span></button>
@@ -733,7 +740,7 @@ const I18N = {
   en: {
     title:"Covalent Bonds of Hydrocarbons",
     subtitle:"// interactive molecular laboratory · build · connect · observe",
-    help:"Help", reset:"Reset",
+    help:"Help", reset:"Reset", connect:"Connect",
     tabBuild:"Build", tabLearn:"Learn",
     quickMolecules:"Quick molecules", addAtoms:"Add atoms",
     bondType:"Bond type", simulation:"Simulation", liveMolecule:"Live molecule",
@@ -767,7 +774,7 @@ const I18N = {
     langBtn:"فارسی",
     popupMove:"Move", popupBond:"Bond", popupDelete:"Delete", popupClose:"Close",
     toastBondUpdated:"Bond updated",
-    toastElectronsOn:"⚡ Valence electrons ON", toastElectronsOff:"Valence electrons OFF",
+    toastElectronsOn:" Valence electrons ON", toastElectronsOff:"Valence electrons OFF",
     toastMotionOn:" Motion ON", toastMotionOff:"Motion OFF",
     toastCarbonAdded:"Carbon added", toastHydrogenAdded:"Hydrogen added",
     toastOxygenAdded:"Oxygen added", toastNitrogenAdded:"Nitrogen added",
@@ -798,7 +805,7 @@ const I18N = {
   fa: {
     title:"پیوندهای کووالانسی هیدروکربن‌ها",
     subtitle:"// آزمایشگاه مولکولی تعاملی · بساز · وصل کن · مشاهده کن",
-    help:"راهنما", reset:"بازنشانی",
+    help:"راهنما", reset:"بازنشانی", connect:"ارتباط",
     tabBuild:"ساخت", tabLearn:"آموزش",
     quickMolecules:"مولکول‌های آماده", addAtoms:"افزودن اتم",
     bondType:"نوع پیوند", simulation:"شبیه‌سازی", liveMolecule:"مولکول زنده",
@@ -1748,7 +1755,7 @@ function toggleSound(){
   const on = !Sound.isEnabled();
   Sound.setEnabled(on);
   const btn = document.getElementById('soundBtn');
-  btn.firstChild.textContent = on ? '🔊 ' : '🔇 ';
+  btn.firstChild.textContent = on ? ' ' : ' ';
   btn.classList.toggle('muted', !on);
   toast(on ? t('soundOn') : t('soundOff'));
   if(on) Sound.tap();

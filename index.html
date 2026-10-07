@@ -23,7 +23,6 @@ body{
   background:var(--bg-0);min-height:100vh;overflow-x:hidden;position:relative;
 }
 html[dir="rtl"] body{font-family:'Vazirmatn','Space Grotesk',system-ui,sans-serif}
-/* Static mesh — no animation (was forcing re-blur of every panel each frame) */
 body::before{
   content:"";position:fixed;inset:-50%;z-index:-2;
   background:
@@ -1077,9 +1076,6 @@ function toggleLang(){
 }
 
 
-/* ============================================================
-   CORE
-   ============================================================ */
 const stage   = document.getElementById('stage');
 const layer   = document.getElementById('atoms');
 const canvas  = document.getElementById('canvas');
@@ -1102,8 +1098,7 @@ const OFF_DOUBLE = [-4, 4];
 const OFF_TRIPLE = [-6, 0, 6];
 const atomMap = new Map();
 
-/* pre-rendered electron glow sprite (drawImage, no shadowBlur) */
-const GLOW_HALF = 22;
+const GLOW_HALF = 6;
 const glowSprite = (function(){
   const R = GLOW_HALF;
   const c = document.createElement('canvas');
@@ -1112,7 +1107,7 @@ const glowSprite = (function(){
   g.translate(R, R);
   const grad = g.createRadialGradient(0,0,0,0,0,R);
   grad.addColorStop(0,   'rgba(224,251,255,1)');
-  grad.addColorStop(0.22,'rgba(103,232,249,0.95)');
+  grad.addColorStop(0.46,'rgba(103,232,249,0.95)');
   grad.addColorStop(0.5, 'rgba(34,211,238,0.45)');
   grad.addColorStop(1,   'rgba(34,211,238,0)');
   g.fillStyle = grad;
@@ -1120,9 +1115,6 @@ const glowSprite = (function(){
   return c;
 })();
 
-/* ============================================================
-   SMART RAF — zero CPU when idle
-   ============================================================ */
 let rafId = null;
 
 function requestRender(){
@@ -1145,7 +1137,6 @@ function tick(){
   } else if(needsRender){
     render();
   }
-  // idle: هیچ RAF در صف نمیمونه → CPU = 0
 }
 
 document.addEventListener('visibilitychange', ()=>{
@@ -1154,7 +1145,6 @@ document.addEventListener('visibilitychange', ()=>{
   }
 });
 
-/* ---------------- particles (reduced to 8) ---------------- */
 (function(){
   const p = document.getElementById('particles');
   const frag = document.createDocumentFragment();
@@ -1173,7 +1163,6 @@ document.addEventListener('visibilitychange', ()=>{
   p.appendChild(frag);
 })();
 
-/* ---------------- sizing ---------------- */
 function applyResize(){
   stageW = stage.clientWidth;
   stageH = stage.clientHeight;
@@ -1221,7 +1210,6 @@ function addAtom(type,x,y){
   Sound.pop();
 }
 
-/* ===== Popup Menu ===== */
 function openAtomPopup(a){
   closeAtomPopup();
   activePopupAtom = a;
@@ -1498,9 +1486,6 @@ function updateFormula(){
 }
 function sub(n){return String(n).replace(/\d/g,d=>'₀₁₂₃₄₅₆₇₈₉'[d]);}
 
-/* ============================================================
-   RENDER — simple lines, no shadows, no pulse
-   ============================================================ */
 function render(){
   ctx.clearRect(0,0,stageW,stageH);
 
@@ -1508,7 +1493,6 @@ function render(){
   const n = atoms.length;
   for(let i=0;i<n;i++) atomMap.set(atoms[i].id, atoms[i]);
 
-  /* ---- bonds: one simple line per offset ---- */
   const nb = bonds.length;
   ctx.lineCap = 'round';
   for(let i=0;i<nb;i++){
@@ -1531,7 +1515,6 @@ function render(){
     const isSingle = b.type === 1;
     const offs = isSingle ? OFF_SINGLE : (b.type === 2 ? OFF_DOUBLE : OFF_TRIPLE);
 
-    /* رنگ خط پیوند */
     ctx.strokeStyle = '#67e8f9';
     ctx.lineWidth = isSingle ? 6 : 3.5;
 
@@ -1545,7 +1528,6 @@ function render(){
     }
   }
 
-  /* ---- valence electrons ---- */
   if(showElectrons){
     for(let i=0;i<n;i++){
       const a = atoms[i];
@@ -1566,7 +1548,6 @@ function render(){
     }
   }
 
-  /* ---- atom DOM positions (only when changed) ---- */
   for(let i=0;i<n;i++){
     const a = atoms[i];
     if(a._lx !== a.x || a._ly !== a.y){
@@ -1629,7 +1610,6 @@ function updateStats(){
   document.getElementById('capacity').style.width = (max ? Math.min(100, used/max*100) : 0) + '%';
 }
 
-/* ===== stability badge — only on mutations ===== */
 function updateStabilityBadge(){
   const badge = document.getElementById('stabilityBadge');
   if(!badge) return;
@@ -1689,7 +1669,6 @@ speedEl.addEventListener('input', e=>{
   requestRender();
 });
 
-/* keep addAtom's toast behaviour */
 const _origAddAtom = addAtom;
 addAtom = function(type,x,y){
   _origAddAtom(type,x,y);

@@ -31,6 +31,7 @@ body::before{
     radial-gradient(circle at 50% 80%,rgba(59,130,246,.16),transparent 50%),
     radial-gradient(circle at 90% 90%,rgba(244,114,182,.10),transparent 45%);
   animation:meshDrift 24s ease-in-out infinite alternate;filter:blur(40px);
+  will-change:transform;
 }
 @keyframes meshDrift{
   0%{transform:translate(0,0) rotate(0deg) scale(1)}
@@ -181,6 +182,7 @@ html[dir="rtl"] .kpi small{text-transform:none;letter-spacing:0;font-size:12px}
     radial-gradient(ellipse at 20% 90%,rgba(168,139,250,.07) 0%,transparent 55%),
     linear-gradient(180deg,#050b16,#03060d);
   border-radius:20px;direction:ltr;
+  contain:layout paint style;
 }
 .stage::before{
   content:"";position:absolute;inset:0;
@@ -198,6 +200,7 @@ html[dir="rtl"] .kpi small{text-transform:none;letter-spacing:0;font-size:12px}
   font-size:22px;font-weight:700;user-select:none;cursor:pointer;z-index:3;
   font-family:'Space Grotesk',sans-serif;
   transition:filter .3s,box-shadow .3s;
+  will-change:left,top;
 }
 .atom::after{
   content:"";position:absolute;inset:0;border-radius:50%;
@@ -368,7 +371,7 @@ html[dir="rtl"] .dot{margin-right:0;margin-left:6px}
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
 .particles{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
-.particles i{position:absolute;width:3px;height:3px;border-radius:50%;background:var(--cyan);opacity:.35;animation:float linear infinite}
+.particles i{position:absolute;width:3px;height:3px;border-radius:50%;background:var(--cyan);opacity:.35;animation:float linear infinite;will-change:transform,opacity}
 @keyframes float{0%{transform:translateY(100vh) scale(0);opacity:0}10%{opacity:.4}90%{opacity:.4}100%{transform:translateY(-10vh) scale(1);opacity:0}}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-track{background:var(--bg-0)}
@@ -1097,52 +1100,126 @@ function toggleLang(){
 }
 
 
-const stage=document.getElementById('stage'), layer=document.getElementById('atoms'), canvas=document.getElementById('canvas');
-const ctx=canvas.getContext('2d');
+/* ============================================================
+   CORE  (performance-optimised)
+   ============================================================ */
+const stage   = document.getElementById('stage');
+const layer   = document.getElementById('atoms');
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const speedEl = document.getElementById('speed');
+
 let atoms=[], bonds=[], selected=null, bondType=1, showElectrons=true, moving=true, t_anim=0;
 let drag=null, dragOffset={x:0,y:0};
 let activePopupAtom=null;
 let movingMode=false;
 let lastStabilityState = 'empty';
 
+/* cached metrics / render state */
+let stageW = 0, stageH = 0;
+let needsRender = true;
+let speedValue = 1;
+
+const TAU = Math.PI * 2;
+const OFF_SINGLE = [0];
+const OFF_DOUBLE = [-4, 4];
+const OFF_TRIPLE = [-6, 0, 6];
+const atomMap = new Map();
+
+/* ---------- cached canvases / gradients ---------- */
+let pulseGrad = null;
+
+/* pre-rendered electron glow (gradient + shadow baked once) */
+const glowSprite = (function(){
+  const S = 2, R = 32;
+  const c = document.createElement('canvas');
+  c.width = c.height = R * 2 * S;
+  const g = c.getContext('2d');
+  g.translate(R * S, R * S);
+  const grad = g.createRadialGradient(0,0,0,0,0,9*S);
+  grad.addColorStop(0,'#e0fbff');
+  grad.addColorStop(0.5,'#67e8f9');
+  grad.addColorStop(1,'transparent');
+  g.fillStyle = grad;
+  g.shadowColor = '#22d3ee';
+  g.shadowBlur = 14 * S;
+  g.beginPath();
+  g.arc(0,0,4.5*S,0,TAU);
+  g.fill();
+  return c;
+})();
+const GLOW_HALF = 32;
+
+function initGradients(){
+  if(pulseGrad) return;
+  pulseGrad = ctx.createRadialGradient(0,0,0,0,0,14);
+  pulseGrad.addColorStop(0,'rgba(255,255,255,.9)');
+  pulseGrad.addColorStop(0.5,'rgba(34,211,238,.5)');
+  pulseGrad.addColorStop(1,'transparent');
+}
+
+/* ---------- particles ---------- */
 (function(){
-  const p=document.getElementById('particles');
+  const p = document.getElementById('particles');
+  const frag = document.createDocumentFragment();
   for(let i=0;i<28;i++){
-    const s=document.createElement('i');
-    s.style.left=Math.random()*100+'%';
-    s.style.animationDuration=(12+Math.random()*18)+'s';
-    s.style.animationDelay=(-Math.random()*20)+'s';
-    s.style.background=['#22d3ee','#a78bfa','#3b82f6','#f472b6'][i%4];
-    s.style.boxShadow='0 0 10px currentColor';
-    const size=2+Math.random()*3;
-    s.style.width=size+'px';s.style.height=size+'px';
-    p.appendChild(s);
+    const s = document.createElement('i');
+    s.style.left = (Math.random()*100)+'%';
+    s.style.animationDuration = (12+Math.random()*18)+'s';
+    s.style.animationDelay = (-Math.random()*20)+'s';
+    s.style.background = ['#22d3ee','#a78bfa','#3b82f6','#f472b6'][i%4];
+    s.style.boxShadow = '0 0 10px currentColor';
+    const size = 2+Math.random()*3;
+    s.style.width = size+'px';
+    s.style.height = size+'px';
+    frag.appendChild(s);
   }
+  p.appendChild(frag);
 })();
 
-function resize(){
-  canvas.width=stage.clientWidth*devicePixelRatio;
-  canvas.height=stage.clientHeight*devicePixelRatio;
-  canvas.style.width=stage.clientWidth+'px';
-  canvas.style.height=stage.clientHeight+'px';
-  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+/* ---------- sizing ---------- */
+function applyResize(){
+  stageW = stage.clientWidth;
+  stageH = stage.clientHeight;
+  const dpr = devicePixelRatio;
+  canvas.width  = Math.round(stageW * dpr);
+  canvas.height = Math.round(stageH * dpr);
+  canvas.style.width  = stageW + 'px';
+  canvas.style.height = stageH + 'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  initGradients();
+  needsRender = true;
 }
-window.addEventListener('resize',resize); resize();
+let __resizeRaf = 0;
+function resize(){
+  if(__resizeRaf) return;
+  __resizeRaf = requestAnimationFrame(()=>{
+    __resizeRaf = 0;
+    applyResize();
+  });
+}
+window.addEventListener('resize', resize, {passive:true});
+applyResize();
 
 function atom(id,el,x,y,type){return {id,el,x,y,type:type||'C',phase:Math.random()*Math.PI*2};}
 
 function addAtom(type,x,y){
   if(!ELEMENTS[type]) type = 'C';
-  if(x===undefined) x = stage.clientWidth/2+(Math.random()-.5)*220;
-  if(y===undefined) y = stage.clientHeight/2+(Math.random()-.5)*160;
-  const id=crypto.randomUUID();
-  const el=document.createElement('div');
-  el.className='atom '+type; el.textContent=type; el.dataset.id=id;
+  if(x===undefined) x = stageW/2+(Math.random()-.5)*220;
+  if(y===undefined) y = stageH/2+(Math.random()-.5)*160;
+  const id = (crypto.randomUUID ? crypto.randomUUID() : ('a'+Math.random().toString(36).slice(2)));
+  const el = document.createElement('div');
+  el.className = 'atom '+type;
+  el.textContent = type;
+  el.dataset.id = id;
   applyAtomStyle(el,type);
   layer.appendChild(el);
-  const a=atom(id,el,x,y,type);
-  atoms.push(a); bindAtom(a); render(); updateFormula();
-  if(typeof updatePTableCount === 'function') updatePTableCount();
+  const a = atom(id,el,x,y,type);
+  atoms.push(a);
+  bindAtom(a);
+  render();
+  updateFormula();
+  updatePTableCount();
   Sound.pop();
 }
 
@@ -1235,7 +1312,7 @@ function deleteAtom(){
 
   render();
   updateFormula();
-  if(typeof updatePTableCount === 'function') updatePTableCount();
+  updatePTableCount();
   setStatus('statusReady');
   toast(t('toastAtomDeleted'));
   Sound.bondBreak();
@@ -1244,7 +1321,7 @@ function deleteAtom(){
 }
 
 function bindAtom(a){
-  a.el.addEventListener('pointerdown',e=>{
+  a.el.addEventListener('pointerdown', e=>{
     e.preventDefault();
     e.stopPropagation();
 
@@ -1274,16 +1351,16 @@ function bindAtom(a){
     openAtomPopup(a);
   });
 
-  a.el.addEventListener('pointermove',e=>{
+  a.el.addEventListener('pointermove', e=>{
     if(!drag||drag!==a)return;
     e.preventDefault();
-    const r=stage.getBoundingClientRect();
-    a.x=Math.max(25,Math.min(stage.clientWidth-25,e.clientX-r.left-dragOffset.x));
-    a.y=Math.max(70,Math.min(stage.clientHeight-35,e.clientY-r.top-dragOffset.y));
+    const r = stage.getBoundingClientRect();
+    a.x = Math.max(25,Math.min(stageW-25,e.clientX-r.left-dragOffset.x));
+    a.y = Math.max(70,Math.min(stageH-35,e.clientY-r.top-dragOffset.y));
     render();
   });
 
-  a.el.addEventListener('pointerup',e=>{
+  a.el.addEventListener('pointerup', ()=>{
     if(drag===a){
       drag=null;
       a.el.classList.remove('dragging');
@@ -1327,10 +1404,18 @@ function setStatus(key){
   el.classList.toggle('bonding', key === 'statusSelectOther');
   updateStabilityBadge();
 }
-function clearSelection(){atoms.forEach(a=>a.el.classList.remove('selected'))}
-function bondIndex(a,b){return bonds.findIndex(x=>(x.a===a.id&&x.b===b.id)||(x.a===b.id&&x.b===a.id))}
+function clearSelection(){ atoms.forEach(a=>a.el.classList.remove('selected')); }
+
+function bondIndex(a,b){
+  for(let i=0;i<bonds.length;i++){
+    const x = bonds[i];
+    if((x.a===a.id&&x.b===b.id)||(x.a===b.id&&x.b===a.id)) return i;
+  }
+  return -1;
+}
+
 function toggleBond(a,b){
-  let i=bondIndex(a,b);
+  const i = bondIndex(a,b);
   if(i<0){
     bonds.push({a:a.id,b:b.id,type:bondType, born:performance.now()});
     setStatus('statusBondCreated');
@@ -1343,54 +1428,59 @@ function toggleBond(a,b){
   }
   render(); updateFormula(); toast(t('toastBondUpdated'));
 }
+
 function setBond(n){
   bondType=n;
   ['single','double','triple'].forEach(x=>document.getElementById(x).classList.remove('active'));
   document.getElementById(['single','double','triple'][n-1]).classList.add('active');
 }
+
 function clearAll(){
   closeAtomPopup();
   atoms.forEach(a=>a.el.remove());
   atoms=[];bonds=[];selected=null;movingMode=false;
   render();updateFormula();
-  if(typeof updatePTableCount === 'function') updatePTableCount();
+  updatePTableCount();
   toast(t('toastCleared'));
   Sound.whoosh();
 }
+
 function preset(name){
   closeAtomPopup();
   clearAllSilent();
-  const cx=stage.clientWidth/2, cy=stage.clientHeight/2;
+  const cx = stageW/2, cy = stageH/2;
   if(name==='CH4'){
     addAtom('C',cx,cy);
     [[cx,cy-125],[cx+125,cy],[cx,cy+125],[cx-125,cy]].forEach(p=>addAtom('H',p[0],p[1]));
-    setTimeout(()=>{for(let i=1;i<5;i++)bonds.push({a:atoms[0].id,b:atoms[i].id,type:1,born:performance.now()});render();updateFormula()},0);
+    setTimeout(()=>{for(let i=1;i<5;i++)bonds.push({a:atoms[0].id,b:atoms[i].id,type:1,born:performance.now()});render();updateFormula();},0);
   } else if(name==='C2H6'){
     addAtom('C',cx-65,cy);addAtom('C',cx+65,cy);
     addAtom('H',cx-130,cy-70);addAtom('H',cx-130,cy+70);addAtom('H',cx-65,cy-110);
     addAtom('H',cx+130,cy-70);addAtom('H',cx+130,cy+70);addAtom('H',cx+65,cy+110);
-    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()});[[0,2],[0,3],[0,4],[1,5],[1,6],[1,7]].forEach(([a,b])=>bonds.push({a:atoms[a].id,b:atoms[b].id,type:1,born:performance.now()}));render();updateFormula()},0);
+    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()});[[0,2],[0,3],[0,4],[1,5],[1,6],[1,7]].forEach(([a,b])=>bonds.push({a:atoms[a].id,b:atoms[b].id,type:1,born:performance.now()}));render();updateFormula();},0);
   } else if(name==='C2H4'){
     addAtom('C',cx-75,cy);addAtom('C',cx+75,cy);
     addAtom('H',cx-140,cy-90);addAtom('H',cx-140,cy+90);addAtom('H',cx+140,cy-90);addAtom('H',cx+140,cy+90);
-    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:2,born:performance.now()});[[0,2],[0,3],[1,4],[1,5]].forEach(([a,b])=>bonds.push({a:atoms[a].id,b:atoms[b].id,type:1,born:performance.now()}));render();updateFormula()},0);
+    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:2,born:performance.now()});[[0,2],[0,3],[1,4],[1,5]].forEach(([a,b])=>bonds.push({a:atoms[a].id,b:atoms[b].id,type:1,born:performance.now()}));render();updateFormula();},0);
   } else if(name==='C2H2'){
     addAtom('C',cx-90,cy);addAtom('C',cx+90,cy);addAtom('H',cx-180,cy);addAtom('H',cx+180,cy);
-    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:3,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()},{a:atoms[1].id,b:atoms[3].id,type:1,born:performance.now()});render();updateFormula()},0);
+    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:3,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()},{a:atoms[1].id,b:atoms[3].id,type:1,born:performance.now()});render();updateFormula();},0);
   } else if(name==='H2O'){
     addAtom('O',cx,cy);addAtom('H',cx-105,cy-65);addAtom('H',cx+105,cy-65);
-    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()});render();updateFormula()},0);
+    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()});render();updateFormula();},0);
   } else if(name==='NH3'){
     addAtom('N',cx,cy);addAtom('H',cx-110,cy+55);addAtom('H',cx,cy-105);addAtom('H',cx+110,cy+55);
-    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[3].id,type:1,born:performance.now()});render();updateFormula()},0);
+    setTimeout(()=>{bonds.push({a:atoms[0].id,b:atoms[1].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[2].id,type:1,born:performance.now()},{a:atoms[0].id,b:atoms[3].id,type:1,born:performance.now()});render();updateFormula();},0);
   }
 }
+
 function clearAllSilent(){
   atoms.forEach(a=>a.el.remove());
   atoms=[];bonds=[];selected=null;movingMode=false;
   render();updateFormula();
-  if(typeof updatePTableCount === 'function') updatePTableCount();
+  updatePTableCount();
 }
+
 function updateFormula(){
   const counts = {};
   atoms.forEach(a=>{ counts[a.type] = (counts[a.type]||0)+1; });
@@ -1402,111 +1492,188 @@ function updateFormula(){
   });
   document.getElementById('formula').textContent = out || '—';
   updateStats();
-}
-function sub(n){return String(n).replace(/\d/g,d=>'₀₁₂₃₄₅₆₇₈₉'[d])}
-function getAtom(id){return atoms.find(a=>a.id===id)}
-
-function render(){
-  ctx.clearRect(0,0,stage.clientWidth,stage.clientHeight);
-  const now=performance.now();
-
-  bonds.forEach(b=>{
-    const a=getAtom(b.a),d=getAtom(b.b); if(!a||!d)return;
-    const dx=d.x-a.x,dy=d.y-a.y,len=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
-    const offsets=b.type===1?[0]:b.type===2?[-4,4]:[-6,0,6];
-    const age=Math.min(1,(now-(b.born||now))/400);
-    const pulse=0.85+0.15*Math.sin(now/500);
-
-    offsets.forEach((off)=>{
-      ctx.save();
-      ctx.translate(a.x,a.y);ctx.rotate(ang);
-      ctx.strokeStyle=`rgba(34,211,238,${0.25*age*pulse})`;
-      ctx.lineWidth=(b.type===1?10:6);ctx.lineCap='round';
-      ctx.shadowColor='#22d3ee';ctx.shadowBlur=22;
-      ctx.beginPath();ctx.moveTo(35,off);ctx.lineTo(len-35,off);ctx.stroke();
-      const grad=ctx.createLinearGradient(35,0,len-35,0);
-      grad.addColorStop(0,'rgba(103,232,249,1)');
-      grad.addColorStop(0.5,'rgba(34,211,238,1)');
-      grad.addColorStop(1,'rgba(103,232,249,1)');
-      ctx.strokeStyle=grad;
-      ctx.lineWidth=(b.type===1?4.5:2.5);
-      ctx.shadowColor='#67e8f9';ctx.shadowBlur=14;
-      ctx.beginPath();ctx.moveTo(35,off);ctx.lineTo(len-35,off);ctx.stroke();
-      ctx.strokeStyle=`rgba(255,255,255,${0.55*age})`;
-      ctx.lineWidth=(b.type===1?2:1.2);ctx.shadowBlur=0;
-      ctx.beginPath();ctx.moveTo(35,off);ctx.lineTo(len-35,off);ctx.stroke();
-      ctx.restore();
-    });
-
-    const pulsePos=((now/1400)%1);
-    const px=a.x+dx*pulsePos, py=a.y+dy*pulsePos;
-    const pgrad=ctx.createRadialGradient(px,py,0,px,py,14);
-    pgrad.addColorStop(0,'rgba(255,255,255,.9)');
-    pgrad.addColorStop(0.5,'rgba(34,211,238,.5)');
-    pgrad.addColorStop(1,'transparent');
-    ctx.fillStyle=pgrad;
-    ctx.beginPath();ctx.arc(px,py,14,0,Math.PI*2);ctx.fill();
-  });
-
-  if(showElectrons){
-    atoms.forEach(a=>{
-      const val = evCount(a.type);
-      if(val <= 0) return;
-      const r = a.type === 'H' ? 32 : 44;
-      for(let i=0;i<val;i++){
-        const ang=t_anim*1.7+(i/val)*Math.PI*2+a.phase;
-        const x=a.x+Math.cos(ang)*r, y=a.y+Math.sin(ang)*r;
-        ctx.strokeStyle='rgba(34,211,238,.10)';ctx.lineWidth=1;
-        ctx.beginPath();ctx.arc(a.x,a.y,r,0,Math.PI*2);ctx.stroke();
-        const eg=ctx.createRadialGradient(x,y,0,x,y,9);
-        eg.addColorStop(0,'#e0fbff');eg.addColorStop(0.5,'#67e8f9');eg.addColorStop(1,'transparent');
-        ctx.fillStyle=eg;ctx.shadowColor='#22d3ee';ctx.shadowBlur=14;
-        ctx.beginPath();ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fill();
-      }
-    });
-  }
-  ctx.shadowBlur=0;
-  atoms.forEach(a=>{a.el.style.left=a.x+'px';a.el.style.top=a.y+'px'});
   updateStabilityBadge();
 }
+function sub(n){return String(n).replace(/\d/g,d=>'₀₁₂₃₄₅₆₇₈₉'[d]);}
+function getAtom(id){return atoms.find(a=>a.id===id);}
 
-function toggleElectrons(){showElectrons=!showElectrons; toast(showElectrons?t('toastElectronsOn'):t('toastElectronsOff'))}
-function toggleRotation(){moving=!moving; toast(moving?t('toastMotionOn'):t('toastMotionOff'))}
+/* ============================================================
+   RENDER  — hot path, kept as lean as possible
+   ============================================================ */
+function render(){
+  const now = performance.now();
+  ctx.clearRect(0,0,stageW,stageH);
+  ctx.shadowBlur = 0;
+
+  /* --- O(1) atom lookup --- */
+  atomMap.clear();
+  const n = atoms.length;
+  for(let i=0;i<n;i++) atomMap.set(atoms[i].id, atoms[i]);
+
+  /* ---------------- bonds ---------------- */
+  const nb = bonds.length;
+  for(let i=0;i<nb;i++){
+    const b = bonds[i];
+    const A = atomMap.get(b.a);
+    const B = atomMap.get(b.b);
+    if(!A || !B) continue;
+
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    if(len < 2) continue;
+
+    const ang  = Math.atan2(dy,dx);
+    const type = b.type;
+    const isSingle = type === 1;
+    const offs = isSingle ? OFF_SINGLE : (type === 2 ? OFF_DOUBLE : OFF_TRIPLE);
+
+    const age   = Math.min(1,(now - (b.born || now)) / 400);
+    const pulse = 0.85 + 0.15 * Math.sin(now * 0.002);
+
+    const x1 = 35, x2 = len - 35;
+
+    ctx.save();
+    ctx.translate(A.x, A.y);
+    ctx.rotate(ang);
+    ctx.lineCap = 'round';
+
+    /* gradient created ONCE per bond (was per line segment) */
+    const grad = ctx.createLinearGradient(x1, 0, x2, 0);
+    grad.addColorStop(0,   'rgba(103,232,249,1)');
+    grad.addColorStop(0.5, 'rgba(34,211,238,1)');
+    grad.addColorStop(1,   'rgba(103,232,249,1)');
+
+    const glowAlpha = 0.25 * age * pulse;
+    const lwGlow = isSingle ? 10  : 6;
+    const lwCore = isSingle ? 4.5 : 2.5;
+    const lwHi   = isSingle ? 2   : 1.2;
+    const hiAlpha = 0.55 * age;
+    const glowColor = 'rgba(34,211,238,' + glowAlpha + ')';
+    const hiColor   = 'rgba(255,255,255,' + hiAlpha + ')';
+
+    for(let k=0;k<offs.length;k++){
+      const off = offs[k];
+
+      ctx.strokeStyle = glowColor;
+      ctx.lineWidth = lwGlow;
+      ctx.shadowColor = '#22d3ee'; ctx.shadowBlur = 22;
+      ctx.beginPath(); ctx.moveTo(x1, off); ctx.lineTo(x2, off); ctx.stroke();
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = lwCore;
+      ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.moveTo(x1, off); ctx.lineTo(x2, off); ctx.stroke();
+
+      ctx.strokeStyle = hiColor;
+      ctx.lineWidth = lwHi;
+      ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.moveTo(x1, off); ctx.lineTo(x2, off); ctx.stroke();
+    }
+    ctx.restore();
+    ctx.shadowBlur = 0;
+
+    /* travelling pulse — cached gradient + translate (no per-frame gradient alloc) */
+    const t = (now * 0.0007142857142857143) % 1;
+    ctx.save();
+    ctx.translate(A.x + dx * t, A.y + dy * t);
+    ctx.fillStyle = pulseGrad;
+    ctx.beginPath(); ctx.arc(0, 0, 14, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------------- valence electrons ---------------- */
+  if(showElectrons){
+    for(let i=0;i<n;i++){
+      const a = atoms[i];
+      const val = evCount(a.type);
+      if(val <= 0) continue;
+
+      const r = a.type === 'H' ? 32 : 44;
+
+      /* orbit ring drawn ONCE with compounded alpha (identical result) */
+      ctx.strokeStyle = 'rgba(34,211,238,' + (1 - Math.pow(0.9, val)) + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, TAU); ctx.stroke();
+
+      /* pre-rendered glow sprite instead of gradient + shadowBlur */
+      for(let j=0;j<val;j++){
+        const ang = t_anim * 1.7 + (j / val) * TAU + a.phase;
+        const x = a.x + Math.cos(ang) * r;
+        const y = a.y + Math.sin(ang) * r;
+        ctx.drawImage(glowSprite, x - GLOW_HALF, y - GLOW_HALF, GLOW_HALF*2, GLOW_HALF*2);
+      }
+    }
+  }
+
+  /* ---------------- atom DOM positions (only when changed) ---------------- */
+  for(let i=0;i<n;i++){
+    const a = atoms[i];
+    if(a._lx !== a.x || a._ly !== a.y){
+      a._lx = a.x; a._ly = a.y;
+      a.el.style.left = a.x + 'px';
+      a.el.style.top  = a.y + 'px';
+    }
+  }
+
+  needsRender = false;
+}
+
+function toggleElectrons(){
+  showElectrons = !showElectrons;
+  needsRender = true;
+  toast(showElectrons ? t('toastElectronsOn') : t('toastElectronsOff'));
+}
+function toggleRotation(){
+  moving = !moving;
+  needsRender = true;
+  toast(moving ? t('toastMotionOn') : t('toastMotionOff'));
+}
 function switchTab(btn, tab){
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('buildTab').style.display=tab==='build'?'block':'none';
-  document.getElementById('learnTab').style.display=tab==='learn'?'block':'none';
+  document.getElementById('buildTab').style.display = tab==='build'?'block':'none';
+  document.getElementById('learnTab').style.display = tab==='learn'?'block':'none';
 }
 function toast(msg){
   Sound.tap();
-  const x=document.getElementById('toast'); x.textContent=msg; x.classList.add('show');
-  clearTimeout(window.__toast); window.__toast=setTimeout(()=>x.classList.remove('show'),1900);
+  const x = document.getElementById('toast');
+  x.textContent = msg;
+  x.classList.add('show');
+  clearTimeout(window.__toast);
+  window.__toast = setTimeout(()=>x.classList.remove('show'),1900);
 }
-function showHelp(){toast(t('toastHelp'))}
-function toggleInfo(){document.getElementById('infoPanel').classList.toggle('open')}
-function resetLab(){preset('CH4');toast(t('toastReset'))}
+function showHelp(){ toast(t('toastHelp')); }
+function toggleInfo(){ document.getElementById('infoPanel').classList.toggle('open'); }
+function resetLab(){ preset('CH4'); toast(t('toastReset')); }
+
 function centerMolecule(){
-  if(!atoms.length)return;
-  const cx=atoms.reduce((s,a)=>s+a.x,0)/atoms.length,cy=atoms.reduce((s,a)=>s+a.y,0)/atoms.length;
-  const tx=stage.clientWidth/2,ty=stage.clientHeight/2;
-  atoms.forEach(a=>{a.x+=tx-cx;a.y+=ty-cy});
-  render();toast(t('toastCentered'));
-}
-function updateStats(){
-  document.getElementById('atomCount').textContent=atoms.length;
-  document.getElementById('bondCount').textContent=bonds.length;
-  const max=atoms.reduce((s,a)=>s+atomValence(a.type),0)*2;
-  const used=bonds.reduce((s,b)=>s+b.type*2,0);
-  document.getElementById('capacity').style.width=(max?Math.min(100,used/max*100):0)+'%';
+  if(!atoms.length) return;
+  let sx=0, sy=0;
+  for(let i=0;i<atoms.length;i++){ sx += atoms[i].x; sy += atoms[i].y; }
+  const cx = sx/atoms.length, cy = sy/atoms.length;
+  const tx = stageW/2 - cx, ty = stageH/2 - cy;
+  for(let i=0;i<atoms.length;i++){ atoms[i].x += tx; atoms[i].y += ty; }
+  render();
+  toast(t('toastCentered'));
 }
 
-/* ===== تابلوی پایداری ===== */
+function updateStats(){
+  document.getElementById('atomCount').textContent = atoms.length;
+  document.getElementById('bondCount').textContent = bonds.length;
+  let max = 0;
+  for(let i=0;i<atoms.length;i++) max += atomValence(atoms[i].type);
+  max *= 2;
+  let used = 0;
+  for(let i=0;i<bonds.length;i++) used += bonds[i].type * 2;
+  document.getElementById('capacity').style.width = (max ? Math.min(100, used/max*100) : 0) + '%';
+}
+
+/* ===== stability badge — now only on mutations, never per frame ===== */
 function updateStabilityBadge(){
   const badge = document.getElementById('stabilityBadge');
+  if(!badge) return;
   const title = document.getElementById('stabilityTitle');
   const sub   = document.getElementById('stabilitySub');
-  if(!badge) return;
 
   badge.classList.remove('stable','unstable','empty');
 
@@ -1524,13 +1691,19 @@ function updateStabilityBadge(){
     return;
   }
 
+  /* single pass: count used valence per atom */
+  const used = new Map();
+  for(let i=0;i<atoms.length;i++) used.set(atoms[i].id, 0);
+  for(let i=0;i<bonds.length;i++){
+    const b = bonds[i];
+    if(used.has(b.a)) used.set(b.a, used.get(b.a) + b.type);
+    if(used.has(b.b)) used.set(b.b, used.get(b.b) + b.type);
+  }
+
   let allSatisfied = true;
-  atoms.forEach(a=>{
-    const used = bonds
-      .filter(b => b.a === a.id || b.b === a.id)
-      .reduce((s,b)=>s + b.type, 0);
-    if(used < atomValence(a.type)) allSatisfied = false;
-  });
+  for(let i=0;i<atoms.length;i++){
+    if(used.get(atoms[i].id) < atomValence(atoms[i].type)){ allSatisfied = false; break; }
+  }
 
   if(allSatisfied){
     badge.classList.add('stable');
@@ -1542,9 +1715,7 @@ function updateStabilityBadge(){
     sub.textContent   = t('unstableSub');
   }
 
-  const newState = badge.classList.contains('stable') ? 'stable'
-                 : badge.classList.contains('unstable') ? 'unstable'
-                 : 'empty';
+  const newState = allSatisfied ? 'stable' : 'unstable';
   if(newState !== lastStabilityState){
     if(newState === 'stable' && lastStabilityState !== 'empty') Sound.stable();
     else if(newState === 'unstable' && lastStabilityState === 'stable') Sound.unstable();
@@ -1552,14 +1723,17 @@ function updateStabilityBadge(){
   }
 }
 
-document.getElementById('speed').addEventListener('input',e=>{
-  document.getElementById('speedValue').textContent=Number(e.target.value).toFixed(1)+'×';
+speedEl.addEventListener('input', e=>{
+  speedValue = Number(e.target.value);
+  document.getElementById('speedValue').textContent = speedValue.toFixed(1) + '×';
+  needsRender = true;
 });
 
+/* keep addAtom's toast behaviour */
 const _origAddAtom = addAtom;
 addAtom = function(type,x,y){
   _origAddAtom(type,x,y);
-  const a=atoms[atoms.length-1];
+  const a = atoms[atoms.length-1];
   if(a && a.el){ a.el.classList.add('glow'); setTimeout(()=>a.el.classList.remove('glow'),900); }
   let msg;
   if(type==='C') msg = t('toastCarbonAdded');
@@ -1574,12 +1748,12 @@ addAtom = function(type,x,y){
 };
 
 document.addEventListener('pointermove',e=>{
-  const b=e.target.closest('button');
-  if(!b)return;
-  const r=b.getBoundingClientRect();
-  b.style.setProperty('--mx',((e.clientX-r.left)/r.width*100)+'%');
-  b.style.setProperty('--my',((e.clientY-r.top)/r.height*100)+'%');
-});
+  const b = e.target.closest('button');
+  if(!b) return;
+  const r = b.getBoundingClientRect();
+  b.style.setProperty('--mx', ((e.clientX-r.left)/r.width*100)+'%');
+  b.style.setProperty('--my', ((e.clientY-r.top)/r.height*100)+'%');
+}, {passive:true});
 
 document.addEventListener('keydown', e=>{
   if(e.key === 'Escape'){
@@ -1591,9 +1765,15 @@ document.addEventListener('keydown', e=>{
   }
 });
 
+/* ===== animation loop — skips work when nothing moves ===== */
 function animate(){
-  t_anim+=0.016*(moving?1:0)*Number(document.getElementById('speed').value);
-  render();
+  const animating = bonds.length > 0 || (moving && showElectrons && atoms.length > 0);
+  if(animating){
+    if(moving) t_anim += 0.016 * speedValue;
+    render();
+  } else if(needsRender){
+    render();
+  }
   requestAnimationFrame(animate);
 }
 
@@ -1615,10 +1795,14 @@ function updatePTableCount(){
   const el = document.getElementById('ptableCount');
   if(el) el.textContent = atoms.length;
 }
+
+/* build the table once, then just toggle visibility */
+let __ptableBuilt = false;
 function rebuildPTable(){
   const grid = document.getElementById('ptableGrid');
   if(!grid) return;
-  grid.innerHTML = '';
+  if(__ptableBuilt) return;
+  const frag = document.createDocumentFragment();
   for(const sym in ELEMENTS){
     const pos = PT_LAYOUT[sym];
     if(!pos) continue;
@@ -1642,9 +1826,12 @@ function rebuildPTable(){
       addAtom(sym);
       updatePTableCount();
     });
-    grid.appendChild(cell);
+    frag.appendChild(cell);
   }
+  grid.appendChild(frag);
+  __ptableBuilt = true;
 }
+
 const Sound = (() => {
   let ctx = null;
   let enabled = true;
@@ -1664,7 +1851,7 @@ const Sound = (() => {
     window.addEventListener(ev, ()=>{
       init();
       if(ctx && ctx.state === 'suspended') ctx.resume();
-    }, {once:false});
+    }, {passive:true});
   });
 
   function tone({freq=440, type='sine', dur=0.2, vol=0.3, attack=0.005, slideTo=null, delay=0}={}){
@@ -1690,7 +1877,7 @@ const Sound = (() => {
     init();
     if(!ctx) return;
     const t0 = ctx.currentTime + delay;
-    const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for(let i=0;i<data.length;i++) data[i] = (Math.random()*2-1);
     const src = ctx.createBufferSource(); src.buffer = buffer;
@@ -1731,21 +1918,11 @@ const Sound = (() => {
       tone({freq:330, dur:0.18, type:'triangle', vol:0.16});
       tone({freq:247, dur:0.22, type:'triangle', vol:0.14, delay:0.12});
     },
-    click(){
-      tone({freq:1200, dur:0.06, type:'sine', vol:0.15});
-    },
-    hover(){
-      tone({freq:1600, dur:0.03, type:'sine', vol:0.06});
-    },
-    whoosh(){
-      noise({dur:0.45, vol:0.25, filterFreq:600});
-    },
-    cancel(){
-      tone({freq:400, slideTo:200, dur:0.15, type:'square', vol:0.12});
-    },
-    tap(){
-      tone({freq:800, dur:0.05, type:'sine', vol:0.12});
-    },
+    click(){ tone({freq:1200, dur:0.06, type:'sine', vol:0.15}); },
+    hover(){ tone({freq:1600, dur:0.03, type:'sine', vol:0.06}); },
+    whoosh(){ noise({dur:0.45, vol:0.25, filterFreq:600}); },
+    cancel(){ tone({freq:400, slideTo:200, dur:0.15, type:'square', vol:0.12}); },
+    tap(){ tone({freq:800, dur:0.05, type:'sine', vol:0.12}); },
     setEnabled(v){ enabled = v; },
     isEnabled(){ return enabled; }
   };
@@ -1761,7 +1938,6 @@ function toggleSound(){
   if(on) Sound.tap();
 }
 
-
 let lastHoverBtn = null;
 document.addEventListener('pointerover', e=>{
   const b = e.target.closest('button');
@@ -1769,11 +1945,10 @@ document.addEventListener('pointerover', e=>{
     lastHoverBtn = b;
     Sound.hover();
   }
-});
+}, {passive:true});
 document.addEventListener('pointerout', e=>{
   if(e.target.closest('button') === lastHoverBtn) lastHoverBtn = null;
-});
-
+}, {passive:true});
 
 applyLang();
 preset('CH4');
@@ -1785,7 +1960,6 @@ animate();
   if(window.__undoPatchLoaded) return;
   window.__undoPatchLoaded = true;
 
-  
   const actions = document.querySelector('.top-actions');
   if(!actions) return;
 
@@ -1806,7 +1980,6 @@ animate();
   actions.insertBefore(redoBtn, actions.firstChild);
   actions.insertBefore(undoBtn, actions.firstChild);
 
-  
   function syncLang(){
     const uSpan = undoBtn.querySelector('span');
     const rSpan = redoBtn.querySelector('span');
@@ -1823,7 +1996,6 @@ animate();
     };
   }
 
-  
   const MAX = 50;
   let stack = [];
   let idx = -1;
@@ -1924,7 +2096,6 @@ animate();
 
   window.__undoPush = push;
 
-  
   const _addAtom      = window.addAtom;
   const _toggleBond   = window.toggleBond;
   const _clearAll     = window.clearAll;
@@ -1983,7 +2154,6 @@ animate();
     }
   });
 
-  
   setTimeout(reset, 200);
 
 })();
